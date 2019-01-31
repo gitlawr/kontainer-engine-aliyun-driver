@@ -505,9 +505,8 @@ func (s *state) validate() error {
 	return nil
 }
 
-func (d *Driver) getAliyunServiceClient(ctx context.Context, state *state) (*cs.Client, error) {
+func getAliyunServiceClient(state *state) (*cs.Client, error) {
 	config := sdk.NewConfig().
-		WithAutoRetry(false).
 		WithTimeout(time.Minute).
 		WithDebug(true)
 	credential := &credentials.AccessKeyCredential{
@@ -658,7 +657,7 @@ func (d *Driver) Create(ctx context.Context, opts *types.DriverOptions, _ *types
 		return nil, err
 	}
 
-	svc, err := d.getAliyunServiceClient(ctx, state)
+	svc, err := getAliyunServiceClient(state)
 	if err != nil {
 		return nil, err
 	}
@@ -708,7 +707,7 @@ func (d *Driver) PostCheck(ctx context.Context, info *types.ClusterInfo) (*types
 	if err != nil {
 		return nil, err
 	}
-	svc, err := d.getAliyunServiceClient(ctx, state)
+	svc, err := getAliyunServiceClient(state)
 	if err != nil {
 		return nil, err
 	}
@@ -778,13 +777,50 @@ func (d *Driver) PostCheck(ctx context.Context, info *types.ClusterInfo) (*types
 	return info, nil
 }
 
+func getClientset(info *types.ClusterInfo) (*kubernetes.Clientset, error) {
+	state, err := getState(info)
+	if err != nil {
+		return nil, err
+	}
+	svc, err := getAliyunServiceClient(state)
+	if err != nil {
+		return nil, err
+	}
+
+	userConfig, err := getClusterUserConfig(svc, state)
+	if err != nil {
+		return nil, err
+	}
+
+	certs, err := getClusterCerts(svc, state)
+	if err != nil {
+		return nil, err
+	}
+
+	currentContext := userConfig.Contexts[userConfig.CurrentContext]
+	host := userConfig.Clusters[currentContext.Cluster].Server
+	if !strings.HasPrefix(host, "https://") {
+		host = fmt.Sprintf("https://%s", host)
+	}
+
+	config := &rest.Config{
+		Host: host,
+		TLSClientConfig: rest.TLSClientConfig{
+			CAData:   []byte(certs.Ca),
+			KeyData:  []byte(certs.Key),
+			CertData: []byte(certs.Cert),
+		},
+	}
+	return kubernetes.NewForConfig(config)
+}
+
 // Remove implements driver interface
 func (d *Driver) Remove(ctx context.Context, info *types.ClusterInfo) error {
 	state, err := getState(info)
 	if err != nil {
 		return err
 	}
-	svc, err := d.getAliyunServiceClient(ctx, state)
+	svc, err := getAliyunServiceClient(state)
 	if err != nil {
 		return err
 	}
@@ -804,7 +840,7 @@ func (d *Driver) GetClusterSize(ctx context.Context, info *types.ClusterInfo) (*
 	if err != nil {
 		return nil, err
 	}
-	svc, err := d.getAliyunServiceClient(ctx, state)
+	svc, err := getAliyunServiceClient(state)
 	if err != nil {
 		return nil, err
 	}
@@ -820,7 +856,7 @@ func (d *Driver) GetVersion(ctx context.Context, info *types.ClusterInfo) (*type
 	if err != nil {
 		return nil, err
 	}
-	svc, err := d.getAliyunServiceClient(ctx, state)
+	svc, err := getAliyunServiceClient(state)
 	if err != nil {
 		return nil, err
 	}
@@ -836,7 +872,7 @@ func (d *Driver) SetClusterSize(ctx context.Context, info *types.ClusterInfo, co
 	if err != nil {
 		return err
 	}
-	svc, err := d.getAliyunServiceClient(ctx, state)
+	svc, err := getAliyunServiceClient(state)
 	if err != nil {
 		return err
 	}
@@ -869,4 +905,26 @@ func (d *Driver) GetK8SCapabilities(ctx context.Context, opts *types.DriverOptio
 			HealthCheckSupported: false,
 		},
 	}, nil
+}
+
+func (d *Driver) ETCDSave(ctx context.Context, clusterInfo *types.ClusterInfo, opts *types.DriverOptions, snapshotName string) error {
+	return fmt.Errorf("ETCD backup operations are not implemented")
+}
+
+func (d *Driver) ETCDRestore(ctx context.Context, clusterInfo *types.ClusterInfo, opts *types.DriverOptions, snapshotName string) error {
+	return fmt.Errorf("ETCD backup operations are not implemented")
+}
+
+func (d *Driver) RemoveLegacyServiceAccount(ctx context.Context, info *types.ClusterInfo) error {
+	clientset, err := getClientset(info)
+	if err != nil {
+		return err
+	}
+
+	err = util.DeleteLegacyServiceAccountAndRoleBinding(clientset)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
