@@ -81,6 +81,9 @@ type state struct {
 	WorkerDataDiskSize       int64  `json:"worker_data_disk_size,omitempty"`
 	NumOfNodes               int64  `json:"num_of_nodes,omitempty"`
 	SnatEntry                bool   `json:"snat_entry,omitempty"`
+	NodeCidrMask             int64  `json:"node_cidr_mask,omitempty"`
+	ProxyMode                string `json:"proxy_mode,omitempty"`
+	EndpointPublicAccess     bool   `json:"endpoint_public_access,omitempty"`
 	// non-managed Kubernetes fields
 	SSHFlags                 bool   `json:"ssh_flags,omitempty"`
 	MasterInstanceChargeType string `json:"master_instance_charge_type,omitempty"`
@@ -95,23 +98,16 @@ type state struct {
 	MasterDataDiskCategory   string `json:"master_data_disk_category,omitempty"`
 	MasterDataDiskSize       int64  `json:"master_data_disk_size,omitempty"`
 	PublicSlb                bool   `json:"public_slb,omitempty"`
-	// multi-az kubernetes options
-	MultiAz             bool   `json:"multi_az,omitempty"`
-	VswitchIDA          string `json:"vswitch_id_a,omitempty"`
-	VswitchIDB          string `json:"vswitch_id_b,omitempty"`
-	VswitchIDC          string `json:"vswitch_id_c,omitempty"`
-	MasterInstanceTypeA string `json:"master_instance_type_a,omitempty"`
-	MasterInstanceTypeB string `json:"master_instance_type_b,omitempty"`
-	MasterInstanceTypeC string `json:"master_instance_type_c,omitempty"`
-	WorkerInstanceTypeA string `json:"worker_instance_type_a,omitempty"`
-	WorkerInstanceTypeB string `json:"worker_instance_type_b,omitempty"`
-	WorkerInstanceTypeC string `json:"worker_instance_type_c,omitempty"`
-	NumOfNodesA         int64  `json:"num_of_nodes_a,omitempty"`
-	NumOfNodesB         int64  `json:"num_of_nodes_b,omitempty"`
-	NumOfNodesC         int64  `json:"num_of_nodes_c,omitempty"`
+	OsType                   string `json:"os_type,omitempty"`
+	Platform                 string `json:"platform,omitempty"`
 
 	// cluster info
 	ClusterInfo types.ClusterInfo
+}
+
+type addons struct {
+	Name   string `json:"name"`
+	Config string `json:"config,omitempty"`
 }
 
 type clusterGetResponse struct {
@@ -347,59 +343,29 @@ func (d *Driver) GetDriverCreateOptions(ctx context.Context) (*types.DriverFlags
 		Type:  types.BoolType,
 		Usage: "Whether or not to create SLB to the API server",
 	}
-	driverFlag.Options["multi-az"] = &types.Flag{
+	driverFlag.Options["os-type"] = &types.Flag{
+		Type:  types.StringType,
+		Usage: "Os-type of pods",
+	}
+	driverFlag.Options["platform"] = &types.Flag{
+		Type:  types.StringType,
+		Usage: "Platform architecture of the host running the pod",
+	}
+	driverFlag.Options["endpoint-public-access"] = &types.Flag{
 		Type:  types.BoolType,
-		Usage: "Whether or not to set up master nodes in multiple available zones",
+		Usage: "API Server on public",
+		Default: &types.Default{
+			DefaultBool: true,
+		},
 	}
-	driverFlag.Options["vswitch-id-a"] = &types.Flag{
+	driverFlag.Options["node-cidr-mask"] = &types.Flag{
 		Type:  types.StringType,
-		Usage: "Vswitch id of zone A",
+		Usage: "Num of pods in each node",
 	}
-	driverFlag.Options["vswitch-id-b"] = &types.Flag{
+	driverFlag.Options["proxy-mode"] = &types.Flag{
 		Type:  types.StringType,
-		Usage: "Vswitch id of zone B",
+		Usage: "Proxy mode,iptables or IPVS,default iptables",
 	}
-	driverFlag.Options["vswitch-id-c"] = &types.Flag{
-		Type:  types.StringType,
-		Usage: "Vswitch id of zone C",
-	}
-	driverFlag.Options["master-instance-type-a"] = &types.Flag{
-		Type:  types.StringType,
-		Usage: "Instance type of the master node in zone A",
-	}
-	driverFlag.Options["master-instance-type-b"] = &types.Flag{
-		Type:  types.StringType,
-		Usage: "Instance type of the master node in zone B",
-	}
-	driverFlag.Options["master-instance-type-c"] = &types.Flag{
-		Type:  types.StringType,
-		Usage: "Instance type of the master node in zone C",
-	}
-	driverFlag.Options["worker-instance-type-a"] = &types.Flag{
-		Type:  types.StringType,
-		Usage: "Instance type of the worker nodes in zone A",
-	}
-	driverFlag.Options["worker-instance-type-b"] = &types.Flag{
-		Type:  types.StringType,
-		Usage: "Instance type of the worker nodes in zone B",
-	}
-	driverFlag.Options["worker-instance-type-c"] = &types.Flag{
-		Type:  types.StringType,
-		Usage: "Instance type of the worker nodes in zone C",
-	}
-	driverFlag.Options["num-of-nodes-a"] = &types.Flag{
-		Type:  types.IntType,
-		Usage: "number of worker nodes in zone A",
-	}
-	driverFlag.Options["num-of-nodes-b"] = &types.Flag{
-		Type:  types.IntType,
-		Usage: "number of worker nodes in zone B",
-	}
-	driverFlag.Options["num-of-nodes-c"] = &types.Flag{
-		Type:  types.IntType,
-		Usage: "number of worker nodes in zone C",
-	}
-
 	return &driverFlag, nil
 }
 
@@ -451,6 +417,11 @@ func getStateFromOpts(driverOptions *types.DriverOptions) (*state, error) {
 	d.WorkerDataDiskSize = options.GetValueFromDriverOptions(driverOptions, types.IntType, "worker-data-disk-size", "workerDataDiskSize").(int64)
 	d.NumOfNodes = options.GetValueFromDriverOptions(driverOptions, types.IntType, "num-of-nodes", "numOfNodes").(int64)
 	d.SnatEntry = options.GetValueFromDriverOptions(driverOptions, types.BoolType, "snat-entry", "snatEntry").(bool)
+	d.OsType = options.GetValueFromDriverOptions(driverOptions, types.StringType, "os-type", "osType").(string)
+	d.Platform = options.GetValueFromDriverOptions(driverOptions, types.StringType, "platform", "platform").(string)
+	d.EndpointPublicAccess = options.GetValueFromDriverOptions(driverOptions, types.BoolType, "endpoint-public-access", "endpointPublicAccess").(bool)
+	d.NodeCidrMask = options.GetValueFromDriverOptions(driverOptions, types.IntType, "node-cidr-mask", "nodeCidrMask").(int64)
+	d.ProxyMode = options.GetValueFromDriverOptions(driverOptions, types.StringType, "proxy-mode", "proxyMode").(string)
 
 	d.SSHFlags = options.GetValueFromDriverOptions(driverOptions, types.BoolType, "ssh-flags", "sshFlags").(bool)
 	d.MasterInstanceChargeType = options.GetValueFromDriverOptions(driverOptions, types.StringType, "master-instance-charge-type", "masterInstanceChargeType").(string)
@@ -465,20 +436,6 @@ func getStateFromOpts(driverOptions *types.DriverOptions) (*state, error) {
 	d.MasterDataDiskCategory = options.GetValueFromDriverOptions(driverOptions, types.StringType, "master-data-disk-category", "masterDataDiskCategory").(string)
 	d.MasterDataDiskSize = options.GetValueFromDriverOptions(driverOptions, types.IntType, "master-data-disk-size", "masterDataDiskSize").(int64)
 	d.PublicSlb = options.GetValueFromDriverOptions(driverOptions, types.BoolType, "public-slb", "publicSlb").(bool)
-
-	d.MultiAz = options.GetValueFromDriverOptions(driverOptions, types.BoolType, "multi-az", "multiAz").(bool)
-	d.VswitchIDA = options.GetValueFromDriverOptions(driverOptions, types.StringType, "vswitch-id-a", "VswitchIdA").(string)
-	d.VswitchIDB = options.GetValueFromDriverOptions(driverOptions, types.StringType, "vswitch-id-b", "VswitchIdB").(string)
-	d.VswitchIDC = options.GetValueFromDriverOptions(driverOptions, types.StringType, "vswitch-id-c", "VswitchIdC").(string)
-	d.MasterInstanceTypeA = options.GetValueFromDriverOptions(driverOptions, types.StringType, "master-instance-type-a", "masterInstanceTypeA").(string)
-	d.MasterInstanceTypeB = options.GetValueFromDriverOptions(driverOptions, types.StringType, "master-instance-type-b", "masterInstanceTypeB").(string)
-	d.MasterInstanceTypeC = options.GetValueFromDriverOptions(driverOptions, types.StringType, "master-instance-type-c", "masterInstanceTypeC").(string)
-	d.WorkerInstanceTypeA = options.GetValueFromDriverOptions(driverOptions, types.StringType, "worker-instance-type-a", "workerInstanceTypeA").(string)
-	d.WorkerInstanceTypeB = options.GetValueFromDriverOptions(driverOptions, types.StringType, "worker-instance-type-b", "workerInstanceTypeB").(string)
-	d.WorkerInstanceTypeC = options.GetValueFromDriverOptions(driverOptions, types.StringType, "worker-instance-type-c", "workerInstanceTypeC").(string)
-	d.NumOfNodesA = options.GetValueFromDriverOptions(driverOptions, types.IntType, "num-of-nodes-a", "numOfNodesA").(int64)
-	d.NumOfNodesB = options.GetValueFromDriverOptions(driverOptions, types.IntType, "num-of-nodes-b", "numOfNodesB").(int64)
-	d.NumOfNodesC = options.GetValueFromDriverOptions(driverOptions, types.IntType, "num-of-nodes-c", "numOfNodesC").(int64)
 
 	return d, d.validate()
 }
